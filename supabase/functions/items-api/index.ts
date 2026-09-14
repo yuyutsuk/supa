@@ -6,7 +6,7 @@ import { handleItems } from "./main.ts";
 export default {
   fetch: withSupabase(
     {
-      auth: ["publishable", "secret"],
+      auth: ["user", "secret"],
     },
     async (req, ctx) => {
       const supabase =
