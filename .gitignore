@@ -1,0 +1,38 @@
+# Environment / secrets
+.env
+.env.*
+!.env.example
+
+# Supabase local state
+.supabase/
+supabase/.temp/
+supabase/.branches/
+
+# Dependencies
+node_modules/
+
+# Deno generated/cache
+.deno/
+deno.lock.tmp
+
+# Build / coverage
+dist/
+build/
+coverage/
+
+# Logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+pnpm-debug.log*
+
+# macOS
+.DS_Store
+
+# Editors
+.vscode/
+.idea/
+
+# Local scratch files
+tmp/
+.temp/
