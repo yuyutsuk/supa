@@ -6,12 +6,21 @@ export async function handleItems(
 ): Promise<Response> {
   const url = new URL(req.url);
   const id = url.searchParams.get("id");
+  const userId = url.searchParams.get("user_id");
 
-  // GET
+  // GET /items-api?user_id=...
   if (req.method === "GET") {
+    if (!userId) {
+      return Response.json(
+        { error: "user_id is required" },
+        { status: 400 },
+      );
+    }
+
     const { data, error } = await supabase
       .from("items")
-      .select("*");
+      .select("*")
+      .eq("user_id", userId);
 
     if (error) {
       return Response.json(
@@ -23,13 +32,23 @@ export async function handleItems(
     return Response.json(data);
   }
 
-  // POST
+  // POST /items-api
   if (req.method === "POST") {
-    const { name } = await req.json();
+    const { name, user_id } = await req.json();
+
+    if (!name || !user_id) {
+      return Response.json(
+        { error: "name and user_id are required" },
+        { status: 400 },
+      );
+    }
 
     const { data, error } = await supabase
       .from("items")
-      .insert({ name })
+      .insert({
+        name,
+        user_id,
+      })
       .select()
       .single();
 
@@ -43,14 +62,22 @@ export async function handleItems(
     return Response.json(data, { status: 201 });
   }
 
-  // PATCH /items-api?id=1
-  if (req.method === "PATCH" && id) {
+  // PATCH /items-api?id=1&user_id=...
+  if (req.method === "PATCH") {
+    if (!id || !userId) {
+      return Response.json(
+        { error: "id and user_id are required" },
+        { status: 400 },
+      );
+    }
+
     const { name } = await req.json();
 
     const { data, error } = await supabase
       .from("items")
       .update({ name })
       .eq("id", id)
+      .eq("user_id", userId)
       .select()
       .single();
 
@@ -64,12 +91,20 @@ export async function handleItems(
     return Response.json(data);
   }
 
-  // DELETE /items-api?id=1
-  if (req.method === "DELETE" && id) {
+  // DELETE /items-api?id=1&user_id=...
+  if (req.method === "DELETE") {
+    if (!id || !userId) {
+      return Response.json(
+        { error: "id and user_id are required" },
+        { status: 400 },
+      );
+    }
+
     const { error } = await supabase
       .from("items")
       .delete()
-      .eq("id", id);
+      .eq("id", id)
+      .eq("user_id", userId);
 
     if (error) {
       return Response.json(
