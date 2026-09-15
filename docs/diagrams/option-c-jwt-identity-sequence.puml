@@ -1,0 +1,90 @@
+@startuml
+title Option C — detailed JWT and canonical identity resolution
+autonumber
+
+actor "Browser / curl" as Client
+participant "Cloudflare Access" as Access
+collections "Access JWKS" as AccessJWKS
+participant "Worker" as Worker
+database "Worker ES256\nprivate JWK" as WorkerKey
+collections "Supabase\npublic JWK set" as SupabaseKeys
+participant "Data API\n(PostgREST)" as API
+participant "Resolver RPC\nSECURITY DEFINER" as RPC
+database "user_identities" as Identities
+database "app_users" as Users
+database "items + RLS" as Items
+
+== Access authentication ==
+Client -> Access: GET /items
+alt Access session absent
+  Access --> Client: login / OTP
+  Client -> Access: verified identity
+end
+Access -> Worker: request + JWT A in Cf-Access-Jwt-Assertion
+note right of Worker
+JWT A: Cloudflare-issued, RS256
+sub=y (provider identity)
+email, iss, aud, exp
+end note
+
+Worker -> AccessJWKS: fetch or cached signing keys
+AccessJWKS --> Worker: public keys
+Worker -> Worker: jwtVerify(A)\nrequire expected iss + aud
+alt A invalid / expired / wrong audience
+  Worker --> Client: 403
+else A valid
+  == Temporary identity-resolution JWT ==
+  Worker -> WorkerKey: import private ES256 JWK
+  Worker -> Worker: mint JWT B; TTL 300 seconds
+  note right of Worker
+JWT B header: ES256, kid=<Supabase key id>
+JWT B claims:
+sub=y; email=<verified Access email>
+cf_access_sub=y; role=authenticated
+bridge_stage=identity_resolution; iat; exp
+end note
+  Worker -> API: POST resolver RPC\nAuthorization: Bearer B
+  API -> SupabaseKeys: choose kid; verify ES256 signature
+  SupabaseKeys --> API: B trusted
+  API -> RPC: execute as authenticated
+  RPC -> RPC: read auth.uid()=y\nread auth.jwt()->>'email'
+  alt active cloudflare_access:y mapping exists
+    RPC -> Identities: select canonical user_id x
+    Identities --> RPC: x
+  else no mapping exists
+    RPC -> Users: find x by normalized verified email
+    alt old GoTrue user was backfilled
+      Users --> RPC: existing x
+    else brand-new Access user
+      RPC -> Users: insert app_users(email); generate x
+      Users --> RPC: new x
+    end
+    RPC -> Identities: insert cloudflare_access:y -> x
+  end
+  RPC --> API: x
+  API --> Worker: x
+  == Final CRUD JWT ==
+  Worker -> Worker: mint JWT C; TTL 300 seconds
+  note right of Worker
+JWT C header: ES256, same kid
+JWT C claims:
+sub=x (canonical ownership identity)
+email=<verified Access email>; cf_access_sub=y
+role=authenticated; iat; exp
+No bridge_stage claim
+end note
+  Worker -> API: items CRUD\nAuthorization: Bearer C
+  API -> SupabaseKeys: choose kid; verify ES256 signature
+  SupabaseKeys --> API: C trusted
+  API -> Items: execute as authenticated
+  Items -> Items: auth.uid()=x; items.user_id=x
+  Items --> API: permitted rows / mutation result
+  API --> Worker: result
+  Worker --> Client: API response only
+end
+
+note over Client,Items
+JWT B and JWT C exist inside Worker memory and go only to Supabase.
+They are never returned in an HTTP response.
+end note
+@enduml

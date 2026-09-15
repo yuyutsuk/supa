@@ -1,3 +1,9 @@
+vars: {
+  d2-config: {
+    layout-engine: elk
+  }
+}
+
 direction: right
 
 client: Browser / API client
@@ -9,7 +15,7 @@ access: Cloudflare Access {
 
 worker: Cloudflare Worker\nitems-api-worker {
   shape: rectangle
-  label: "Cloudflare Worker\nitems-api-worker"
+  label: "Cloudflare Worker\nvalidates Access; mints B and C"
 }
 
 access_jwks: Cloudflare Access JWKS {
@@ -24,7 +30,7 @@ worker_key: Worker Secret {
 
 supabase: Supabase Data API {
   shape: rectangle
-  label: "Supabase Data API\nPostgREST"
+  label: "Supabase Data API\nPostgREST + RPC"
 }
 
 supabase_key: Supabase signing key {
@@ -32,9 +38,24 @@ supabase_key: Supabase signing key {
   label: "Imported ES256 signing key\npublic key verifies bridge JWT"
 }
 
+resolver: resolve_or_provision\n_current_identity() {
+  shape: rectangle
+  label: "SECURITY DEFINER RPC\nreturns canonical x"
+}
+
+identity_map: public.user_identities {
+  shape: cylinder
+  label: "cloudflare_access + y\n→ canonical user_id x"
+}
+
+app_users: public.app_users {
+  shape: cylinder
+  label: "canonical users\nid=x; email"
+}
+
 postgres: Postgres + RLS {
   shape: cylinder
-  label: "items table\nauth.uid() + authenticated role"
+  label: "items.user_id=x\nauth.uid()=x\nrole=authenticated"
 }
 
 gotrue: Supabase GoTrue {
@@ -46,20 +67,27 @@ legacy_client: Existing client
 
 client -> access: "1. request Worker URL"
 access -> client: "2. Access login/session"
-access -> worker: "3. Cf-Access-Jwt-Assertion\nAccess JWT (RS256)"
-worker -> access_jwks: "4. fetch/cached JWKS\nverify issuer + aud + signature"
-worker -> worker_key: "5. sign five-minute JWT\nsub, email, role=authenticated, iat, exp"
-worker -> supabase: "6. apikey: publishable key\nAuthorization: Bearer bridge JWT"
-supabase -> supabase_key: "7. verify ES256 signature + kid"
-supabase -> postgres: "8. run CRUD query"
-postgres -> supabase: "9. RLS evaluates auth.uid()\nand role=authenticated"
-supabase -> worker: "10. permitted rows / RLS denial"
-worker -> client: "11. API response"
+access -> worker: "3. JWT A — Cf-Access-Jwt-Assertion\nRS256; sub=y; email; aud"
+worker -> access_jwks: "4. verify A: signature + issuer + aud"
+worker -> worker_key: "5. sign JWT B (temporary, 5 min)\nsub=y; role=authenticated\nbridge_stage=identity_resolution"
+worker -> supabase: "6. RPC request with Bearer B"
+supabase -> supabase_key: "7. verify B: ES256 + kid"
+supabase -> resolver: "8. authenticated RPC\nauth.uid()=y; email from JWT"
+resolver -> identity_map: "9. resolve existing y→x"
+resolver -> app_users: "10. otherwise match/create x by verified email\nand persist y→x"
+resolver -> supabase: "11. return x"
+worker -> worker_key: "12. sign JWT C (final, 5 min)\nsub=x; cf_access_sub=y\nrole=authenticated"
+worker -> supabase: "13. CRUD with Bearer C\nWorker derives user_id=x"
+supabase -> supabase_key: "14. verify C: ES256 + kid"
+supabase -> postgres: "15. CRUD; RLS auth.uid()=x"
+postgres -> supabase: "16. permitted rows / mutation"
+supabase -> worker: "17. result"
+worker -> client: "18. API response (never bridge JWT)"
 
 legacy_client -> gotrue: "existing email/password or OAuth"
 gotrue -> legacy_client: "Supabase Auth JWT"
 legacy_client -> supabase: "existing direct Data API flow"
-gotrue -> supabase_key: "issues new sessions\nwith active signing key"
+gotrue -> app_users: "old UUID x backfilled\nGoTrue can be retired later"
 
 worker.style.fill: "#e3f2fd"
 access.style.fill: "#fff3e0"

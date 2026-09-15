@@ -3,13 +3,18 @@ import { createRemoteJWKSet, importJWK, jwtVerify, SignJWT } from "jose";
 
 type ItemBody = {
   name?: string;
-  user_id?: string;
+};
+
+type AccessIdentity = {
+  email: string;
+  sub: string;
 };
 
 // Wrangler cannot infer secret names because secrets are not stored in config.
 type WorkerEnv = {
   CF_ACCESS_AUD: string;
   CF_ACCESS_TEAM_DOMAIN: string;
+  DEBUG_LOG_BRIDGE_JWTS?: string;
   SUPABASE_URL: string;
   SUPABASE_KEY: string;
   SUPABASE_JWT_KEY_ID: string;
@@ -43,7 +48,7 @@ async function readBody(request: Request): Promise<ItemBody | null> {
       return typeof property === "string" ? property : undefined;
     };
 
-    return { name: field("name"), user_id: field("user_id") };
+    return { name: field("name") };
   } catch {
     return null;
   }
@@ -82,10 +87,10 @@ function readPrivateSigningJwk(serialized: string): PrivateSigningJwk {
   };
 }
 
-async function mintSupabaseJwt(
+async function validateAccessAssertion(
   accessAssertion: string,
   env: WorkerEnv,
-): Promise<string> {
+): Promise<AccessIdentity> {
   const accessJwks = createRemoteJWKSet(
     new URL(`${env.CF_ACCESS_TEAM_DOMAIN}/cdn-cgi/access/certs`),
   );
@@ -94,25 +99,66 @@ async function mintSupabaseJwt(
     issuer: env.CF_ACCESS_TEAM_DOMAIN,
   });
 
-  if (typeof payload.sub !== "string" || !UUID_PATTERN.test(payload.sub)) {
+  if (
+    typeof payload.sub !== "string" ||
+    !UUID_PATTERN.test(payload.sub) ||
+    typeof payload.email !== "string" ||
+    payload.email.length === 0
+  ) {
     throw new Error("Cloudflare Access subject is not a UUID");
   }
 
+  return { email: payload.email, sub: payload.sub };
+}
+
+async function mintSupabaseJwt(
+  identity: AccessIdentity,
+  subject: string,
+  env: WorkerEnv,
+  bridgeStage?: "identity_resolution",
+): Promise<string> {
   const signingKey = await importJWK(readPrivateSigningJwk(env.SUPABASE_JWT_SIGNING_KEY), "ES256");
   const claims: Record<string, string> = {
-    cf_access_sub: payload.sub,
+    cf_access_sub: identity.sub,
+    email: identity.email,
     role: "authenticated",
   };
-  if (typeof payload.email === "string") {
-    claims.email = payload.email;
+  if (bridgeStage) {
+    claims.bridge_stage = bridgeStage;
   }
 
   return new SignJWT(claims)
     .setProtectedHeader({ alg: "ES256", kid: env.SUPABASE_JWT_KEY_ID, typ: "JWT" })
-    .setSubject(payload.sub)
+    .setSubject(subject)
     .setIssuedAt()
     .setExpirationTime(`${SUPABASE_JWT_TTL_SECONDS}s`)
     .sign(signingKey);
+}
+
+function createSupabaseClient(env: WorkerEnv, accessToken: string) {
+  return createClient(env.SUPABASE_URL, env.SUPABASE_KEY, {
+    accessToken: () => accessToken,
+    auth: {
+      autoRefreshToken: false,
+      detectSessionInUrl: false,
+      persistSession: false,
+    },
+  });
+}
+
+async function resolveInternalUserId(identity: AccessIdentity, env: WorkerEnv): Promise<string> {
+  const resolutionJwt = await mintSupabaseJwt(identity, identity.sub, env, "identity_resolution");
+  if (env.DEBUG_LOG_BRIDGE_JWTS !== "false") {
+    console.log("Option C identity-resolution JWT", resolutionJwt);
+  }
+  const { data, error } = await createSupabaseClient(env, resolutionJwt)
+    .rpc("resolve_or_provision_current_identity");
+
+  if (error || typeof data !== "string" || !UUID_PATTERN.test(data)) {
+    throw new Error("Unable to resolve application identity");
+  }
+
+  return data;
 }
 
 export default {
@@ -123,32 +169,32 @@ export default {
       return Response.json({ error: "Cloudflare Access authentication is required" }, { status: 403 });
     }
 
-    let supabaseJwt: string;
+    let identity: AccessIdentity;
     try {
-      supabaseJwt = await mintSupabaseJwt(accessAssertion, env);
+      identity = await validateAccessAssertion(accessAssertion, env);
     } catch {
       return Response.json({ error: "Invalid Cloudflare Access token" }, { status: 403 });
     }
 
-    const supabase = createClient(env.SUPABASE_URL, env.SUPABASE_KEY, {
-      accessToken: () => supabaseJwt,
-      auth: {
-        autoRefreshToken: false,
-        detectSessionInUrl: false,
-        persistSession: false,
-      },
-    });
+    let internalUserId: string;
+    let supabaseJwt: string;
+    try {
+      internalUserId = await resolveInternalUserId(identity, env);
+      supabaseJwt = await mintSupabaseJwt(identity, internalUserId, env);
+      if (env.DEBUG_LOG_BRIDGE_JWTS !== "false") {
+        console.log("Option C final CRUD JWT", supabaseJwt);
+      }
+    } catch {
+      return Response.json({ error: "Unable to resolve application identity" }, { status: 403 });
+    }
+
+    const supabase = createSupabaseClient(env, supabaseJwt);
 
     const url = new URL(request.url);
     const id = url.searchParams.get("id");
-    const userId = url.searchParams.get("user_id");
 
     if (request.method === "GET") {
-      if (!userId) {
-        return Response.json({ error: "user_id is required" }, { status: 400 });
-      }
-
-      const { data, error } = await supabase.from("items").select("*").eq("user_id", userId);
+      const { data, error } = await supabase.from("items").select("*").eq("user_id", internalUserId);
       return error
         ? Response.json({ error: error.message }, { status: 500 })
         : Response.json(data);
@@ -156,13 +202,13 @@ export default {
 
     if (request.method === "POST") {
       const body = await readBody(request);
-      if (!body || !hasText(body.name) || !hasText(body.user_id)) {
-        return Response.json({ error: "name and user_id are required" }, { status: 400 });
+      if (!body || !hasText(body.name)) {
+        return Response.json({ error: "name is required" }, { status: 400 });
       }
 
       const { data, error } = await supabase
         .from("items")
-        .insert({ name: body.name, user_id: body.user_id })
+        .insert({ name: body.name, user_id: internalUserId })
         .select()
         .single();
       return error
@@ -171,8 +217,8 @@ export default {
     }
 
     if (request.method === "PATCH") {
-      if (!id || !userId) {
-        return Response.json({ error: "id and user_id are required" }, { status: 400 });
+      if (!id) {
+        return Response.json({ error: "id is required" }, { status: 400 });
       }
 
       const body = await readBody(request);
@@ -180,7 +226,7 @@ export default {
         .from("items")
         .update({ name: body?.name })
         .eq("id", id)
-        .eq("user_id", userId)
+        .eq("user_id", internalUserId)
         .select()
         .single();
       return error
@@ -189,15 +235,15 @@ export default {
     }
 
     if (request.method === "DELETE") {
-      if (!id || !userId) {
-        return Response.json({ error: "id and user_id are required" }, { status: 400 });
+      if (!id) {
+        return Response.json({ error: "id is required" }, { status: 400 });
       }
 
       const { error } = await supabase
         .from("items")
         .delete()
         .eq("id", id)
-        .eq("user_id", userId);
+        .eq("user_id", internalUserId);
       return error
         ? Response.json({ error: error.message }, { status: 500 })
         : new Response(null, { status: 204 });
