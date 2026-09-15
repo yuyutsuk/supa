@@ -24,6 +24,7 @@ participant "Cloudflare Access" as Access
 participant "Worker\nitems-api-worker" as Worker
 collections "Cloudflare Access JWKS" as AccessJWKS
 database "Worker secret\nES256 private JWK" as WorkerKey
+database "Cloudflare D1\naccess_identities" as D1
 participant "Supabase Data API\n(PostgREST)" as DataAPI
 database "Postgres + RLS" as DB
 
@@ -49,12 +50,18 @@ alt Missing, invalid, expired, wrong issuer, or wrong aud
 else Valid Access assertion
   Worker -> Worker: read identity: sub + email
   Worker -> Worker: reject if sub is not UUID-shaped
-  Worker -> WorkerKey: import ES256 private JWK
-  Worker -> Worker: mint JWT B\nsub=y; bridge_stage=identity_resolution; exp=now+300s
-  Worker -> DataAPI: resolver RPC\nAuthorization: Bearer JWT B
-  DataAPI -> DB: resolve Access y to canonical x
-  DB --> DataAPI: x
-  DataAPI --> Worker: x
+  Worker -> D1: lookup y -> x
+  alt D1 directory hit
+    D1 --> Worker: x
+  else D1 directory miss (one-time provisioning/recovery path)
+    Worker -> WorkerKey: import ES256 private JWK
+    Worker -> Worker: mint JWT B\nsub=y; bridge_stage=identity_resolution; exp=now+300s
+    Worker -> DataAPI: resolver RPC\nAuthorization: Bearer JWT B
+    DataAPI -> DB: resolve Access y to canonical x
+    DB --> DataAPI: x
+    DataAPI --> Worker: x
+    Worker -> D1: insert y -> x
+  end
   Worker -> Worker: mint JWT C\nsub=x; cf_access_sub=y; role=authenticated; exp=now+300s
   Worker -> DataAPI: CRUD request\nAuthorization: Bearer JWT C
 
@@ -78,7 +85,7 @@ else Valid Access assertion
 end
 
 note over Access,DB
-JWT B exists only for identity resolution; JWT C reaches items/RLS.
+JWT C reaches items/RLS on every request. JWT B exists only when D1 lacks y -> x.
 GoTrue remains enabled while legacy users are progressively linked.
 end note
 @enduml

@@ -16,9 +16,11 @@ Client -> Cloudflare Access -> Cf-Access-Jwt-Assertion
 1. A Cloudflare Access application will protect `items-api-worker` and authenticate the caller.
 2. The Worker reads `Cf-Access-Jwt-Assertion` and validates its signature using the Access team JWKS, expected issuer, and application audience.
 3. The validated Access `sub` (must be a UUID) and `email` are the identity source.
-4. The Worker signs a new ES256 JWT containing `sub`, `role: "authenticated"`, `iat`, `exp` (five minutes), `email`, and `cf_access_sub`.
-5. `@supabase/supabase-js` receives that JWT through its `accessToken` option and sends it to the Data API.
-6. Supabase verifies the JWT with the matching imported signing key and Postgres applies existing RLS policies.
+4. The Worker resolves `Access sub y -> canonical user_id x` from the bound Cloudflare D1 `IDENTITY_DB` directory.
+5. On a D1 directory miss only, it mints a temporary five-minute resolver JWT with `sub=y` and `bridge_stage=identity_resolution`, calls the tightly-scoped Supabase RPC, and persists `y -> x` in D1.
+6. The Worker signs final JWT C with `sub=x`, `role: "authenticated"`, `iat`, `exp` (five minutes), `email`, and `cf_access_sub`.
+7. `@supabase/supabase-js` receives JWT C through its `accessToken` option and sends it to the Data API.
+8. Supabase verifies JWT C with the matching imported signing key and Postgres applies existing RLS policies.
 
 ## Required remote setup
 
@@ -37,20 +39,26 @@ Generate an ES256 private JWK and keep it in a secure temporary file. Use the **
 - `SUPABASE_JWT_SIGNING_KEY` can mint Data API-trusted JWTs. It must only exist in Cloudflare Worker Secrets and Supabase's signing-key store, and must be rotated in both places.
 - The Supabase publishable key identifies the application; it does not bypass RLS.
 
-## Existing-user mapping — deliberately deferred
+## Existing-user mapping — D1 fast path with Supabase fallback
 
 Cloudflare Access `sub` is a UUID but is not the existing Supabase Auth user UUID. The current `items.user_id = auth.uid()` RLS model works only once a row's owner UUID equals the Access `sub` used in the bridged JWT.
 
-Do not mass-update `items.user_id` yet. First inspect foreign keys to `auth.users`, create an explicit mapping from Access subject/email to the old ownership UUID, backfill safely, and then choose either an ownership rewrite or a mapping-aware RLS policy. GoTrue stays live until that migration is complete.
+`items.user_id` is not mass-updated. The canonical ownership UUID remains `x`.
+D1 stores the runtime lookup `y -> x`; Supabase `app_users` and `user_identities`
+remain the controlled provisioning and audit path while migration is in progress.
+GoTrue stays live until that migration is complete.
 
 ## Test status
 
 - Worker bundle validation: passed (`wrangler deploy --dry-run`).
+- D1 identity directory: passed. `items-api-identities` was created in Oceania;
+  `0001_access_identity_directory.sql` was applied locally and remotely.
 - Supabase signing key: passed. A fresh ES256 private JWK was imported through the Supabase Management API and activated. The matching JWK and `kid`, plus the Supabase URL and publishable key, were stored as secrets on `items-api-worker`. No key material was committed or logged.
 - Access application: passed. The application and One-time PIN policy were created in the Cloudflare dashboard. Its audience and team domain were set as `CF_ACCESS_AUD` and `CF_ACCESS_TEAM_DOMAIN` Worker secrets.
 - Deployment: passed. Option C was deployed to `https://items-api-worker.gaurkuber.workers.dev`.
 - Unauthenticated edge test: passed. A request without an Access session receives Cloudflare Access HTTP 302 login interception rather than reaching the Worker.
-- Authenticated Access assertion and end-to-end Data API/RLS: pending a browser/session request to the newly deployed Worker. Existing-user ownership mapping remains separately deferred.
+- D1-aware Worker deployment and end-to-end Data API/RLS: pending deployment
+  confirmation and an authenticated browser/session request.
 
 The proof will be a pilot user creating, reading, updating, and deleting only rows mapped to that Access identity; the existing GoTrue JWT flow remains available throughout.
 

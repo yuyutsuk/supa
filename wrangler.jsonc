@@ -1,10 +1,18 @@
 {
-  "$schema": "./node_modules/wrangler/config-schema.json",
-  "name": "items-api-worker",
-  "main": "src/index.ts",
-  "compatibility_date": "2026-09-15",
-  "observability": {
-    "enabled": true,
-    "head_sampling_rate": 1
-  }
+	"$schema": "./node_modules/wrangler/config-schema.json",
+	"name": "items-api-worker",
+	"main": "src/index.ts",
+	"compatibility_date": "2026-09-15",
+	"observability": {
+		"enabled": true,
+		"head_sampling_rate": 1
+	},
+	"d1_databases": [
+		{
+			"binding": "IDENTITY_DB",
+			"database_name": "items-api-identities",
+			"database_id": "c5a32c1b-557f-4d17-9610-3ee8fde86c35",
+			"migrations_dir": "d1/migrations"
+		}
+	]
 }

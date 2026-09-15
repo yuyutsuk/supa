@@ -2,8 +2,12 @@
 
 ## Status
 
-**Proposal only.** It describes the next migration after Option C. No database
-schema, RLS policy, or Worker change is made by this document.
+**Phase 1 implemented locally; Worker deployment and end-to-end Access test pending.**
+
+Supabase schema migration `20260915000100_identity_migration.sql` is applied.
+Cloudflare D1 database `items-api-identities` has the `access_identities`
+directory schema applied. The Worker now checks D1 first and only uses the
+Supabase resolver on a D1 miss.
 
 ## Problem
 
@@ -30,6 +34,8 @@ may break foreign keys to `auth.users`.
 
 Introduce an application-owned canonical identity (`x`) and provider-identity
 mapping (`y -> x`). Preserve existing business ownership IDs during migration.
+Use D1 as the low-latency runtime directory after an identity has been
+provisioned; retain Supabase as the controlled provisioning and audit path.
 
 ```text
 Cloudflare Access identity
@@ -46,6 +52,11 @@ public.app_users
               |
               v
 public.items.user_id = x
+```
+
+```text
+Cloudflare D1 access_identities
+  access_sub y -> user_id x
 ```
 
 The final bridge JWT will contain:
@@ -99,18 +110,19 @@ items              keep existing ownership RLS
 ```
 
 There is one bootstrap issue: the Worker knows Access `y` before it knows the
-canonical `x`. Resolve it without a broad `service_role` secret in the Worker:
+canonical `x`. The normal path uses D1; the Supabase RPC is a one-time fallback
+without a broad `service_role` secret in the Worker:
 
 ```text
 1. Worker validates the Access assertion and obtains y + verified email.
-2. Worker mints a temporary five-minute Supabase JWT with sub=y.
-3. Worker calls a custom SQL RPC: resolve_or_provision_current_identity().
-4. RPC reads auth.uid() (y) and auth.jwt()->>'email'; it returns canonical x.
-5. Worker mints the final five-minute JWT with sub=x.
-6. Worker performs normal CRUD using the final JWT.
+2. Worker asks D1 for y -> x.
+3. On a D1 hit, Worker mints the final five-minute JWT with sub=x and performs CRUD.
+4. On a D1 miss only, Worker mints a temporary JWT with sub=y and calls
+   resolve_or_provision_current_identity().
+5. RPC returns x; Worker persists y -> x to D1 and then mints final JWT C.
 ```
 
-The RPC is a narrowly scoped `SECURITY DEFINER` function. It must:
+The fallback RPC is a narrowly scoped `SECURITY DEFINER` function. It must:
 
 - accept no caller-supplied user-ID argument;
 - derive `y` only from `auth.uid()` and email only from signed JWT claims;
@@ -149,11 +161,11 @@ but can change if the user is removed/re-added or logs into another organization
 
 ## New Access users
 
-For a first-time Access user with no mapping:
+For a first-time Access user with no D1 mapping:
 
-1. `resolve_or_provision_current_identity()` creates `app_users.id = x`.
-2. It creates `cloudflare_access:y -> x` in `user_identities`.
-3. The Worker receives `x`, mints the final JWT with `sub=x`, and proceeds.
+1. The Worker takes the D1-miss path and calls `resolve_or_provision_current_identity()`.
+2. RPC creates `app_users.id = x` and `cloudflare_access:y -> x` in `user_identities`.
+3. Worker writes `y -> x` to D1, mints final JWT C with `sub=x`, and proceeds.
 
 No new GoTrue user, password, or Supabase login session is created. This lets
 new users be fully Access-native while old users retain their historical `x`
@@ -161,15 +173,18 @@ ownership ID.
 
 ## GoTrue retirement phases
 
-1. **Compatibility:** GoTrue remains enabled; Option C can still mint `sub=x`
-   for linked old users.
-2. **Backfill/link:** migrate app-user rows, foreign keys, and Access mappings.
-   Monitor unmapped and ambiguous users.
-3. **Access-first:** all new users provision only through Access; disable new
+1. **Compatibility:** GoTrue remains enabled; Option C mints `sub=x` for linked users.
+2. **D1 directory:** D1 receives every new `y -> x` link. Worker reads D1 first;
+   JWT B/RPC remain only for a missing directory row.
+3. **Backfill/link:** seed D1 for all verified existing links, compare D1 and
+   Supabase mappings, and repair any mismatch before removing fallback use.
+4. **Access-first:** all new users provision only through Access; disable new
    password signups while retaining old login only for one-time account linking.
-4. **Retire:** after every active user is linked and no dependency remains on
-   `auth.users`, remove GoTrue sign-in paths and the remaining `auth.users`
-   foreign-key dependency.
+5. **Retire resolver:** when D1 has all active mappings and reconciliation is
+   clean, remove JWT B and `resolve_or_provision_current_identity()` from the
+   Worker request path. Retain Supabase mapping read-only for audit/rollback.
+6. **Retire GoTrue:** after every active user is linked and no dependency remains
+   on `auth.users`, remove GoTrue sign-in paths and the remaining dependency.
 
 Rollback before retirement is straightforward: keep issuing/accepting the old
 GoTrue JWTs, because their `sub` remains the same canonical `x`.
@@ -195,3 +210,5 @@ business ownership stable and makes providers replaceable.
 4. An ambiguous email cannot auto-link and receives a safe linking-required
    response.
 5. A revoked mapping stops resolution after the short bridge-JWT lifetime.
+6. A D1 directory hit creates only final JWT C and makes no Supabase resolver RPC.
+7. A D1 miss provisions once, writes D1 `y -> x`, and the next request is a hit.

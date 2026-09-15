@@ -11,7 +11,7 @@ type AccessIdentity = {
 };
 
 // Wrangler cannot infer secret names because secrets are not stored in config.
-type WorkerEnv = {
+type WorkerEnv = Env & {
   CF_ACCESS_AUD: string;
   CF_ACCESS_TEAM_DOMAIN: string;
   DEBUG_LOG_BRIDGE_JWTS?: string;
@@ -19,6 +19,11 @@ type WorkerEnv = {
   SUPABASE_KEY: string;
   SUPABASE_JWT_KEY_ID: string;
   SUPABASE_JWT_SIGNING_KEY: string;
+};
+
+type AccessIdentityDirectoryRow = {
+  revoked_at: string | null;
+  user_id: string;
 };
 
 type PrivateSigningJwk = {
@@ -147,6 +152,18 @@ function createSupabaseClient(env: WorkerEnv, accessToken: string) {
 }
 
 async function resolveInternalUserId(identity: AccessIdentity, env: WorkerEnv): Promise<string> {
+  const directoryIdentity = await env.IDENTITY_DB
+    .prepare("select user_id, revoked_at from access_identities where access_sub = ?")
+    .bind(identity.sub)
+    .first<AccessIdentityDirectoryRow>();
+
+  if (directoryIdentity) {
+    if (directoryIdentity.revoked_at !== null || !UUID_PATTERN.test(directoryIdentity.user_id)) {
+      throw new Error("Cloudflare Access identity is not active");
+    }
+    return directoryIdentity.user_id;
+  }
+
   const resolutionJwt = await mintSupabaseJwt(identity, identity.sub, env, "identity_resolution");
   if (env.DEBUG_LOG_BRIDGE_JWTS !== "false") {
     console.log("Option C identity-resolution JWT", resolutionJwt);
@@ -158,7 +175,27 @@ async function resolveInternalUserId(identity: AccessIdentity, env: WorkerEnv): 
     throw new Error("Unable to resolve application identity");
   }
 
-  return data;
+  await env.IDENTITY_DB
+    .prepare(
+      "insert into access_identities (access_sub, user_id) values (?, ?) on conflict(access_sub) do nothing",
+    )
+    .bind(identity.sub, data)
+    .run();
+
+  const resolvedIdentity = await env.IDENTITY_DB
+    .prepare("select user_id, revoked_at from access_identities where access_sub = ?")
+    .bind(identity.sub)
+    .first<AccessIdentityDirectoryRow>();
+
+  if (
+    !resolvedIdentity ||
+    resolvedIdentity.revoked_at !== null ||
+    !UUID_PATTERN.test(resolvedIdentity.user_id)
+  ) {
+    throw new Error("Unable to persist application identity");
+  }
+
+  return resolvedIdentity.user_id;
 }
 
 export default {

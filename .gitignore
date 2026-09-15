@@ -19,6 +19,7 @@ deno.lock.tmp
 dist/
 build/
 coverage/
+.wrangler/
 
 # Logs
 *.log

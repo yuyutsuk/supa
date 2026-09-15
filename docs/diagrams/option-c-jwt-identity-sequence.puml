@@ -6,6 +6,7 @@ actor "Browser / curl" as Client
 participant "Cloudflare Access" as Access
 collections "Access JWKS" as AccessJWKS
 participant "Worker" as Worker
+database "Cloudflare D1\naccess_identities" as D1
 database "Worker ES256\nprivate JWK" as WorkerKey
 collections "Supabase\npublic JWK set" as SupabaseKeys
 participant "Data API\n(PostgREST)" as API
@@ -33,36 +34,44 @@ Worker -> Worker: jwtVerify(A)\nrequire expected iss + aud
 alt A invalid / expired / wrong audience
   Worker --> Client: 403
 else A valid
-  == Temporary identity-resolution JWT ==
-  Worker -> WorkerKey: import private ES256 JWK
-  Worker -> Worker: mint JWT B; TTL 300 seconds
-  note right of Worker
+  == Normal identity lookup ==
+  Worker -> D1: prepared lookup by access_sub=y
+  alt D1 directory hit
+    D1 --> Worker: canonical x
+  else D1 directory miss: provisioning/recovery only
+    == Temporary identity-resolution JWT ==
+    Worker -> WorkerKey: import private ES256 JWK
+    Worker -> Worker: mint JWT B; TTL 300 seconds
+    note right of Worker
 JWT B header: ES256, kid=<Supabase key id>
 JWT B claims:
 sub=y; email=<verified Access email>
 cf_access_sub=y; role=authenticated
 bridge_stage=identity_resolution; iat; exp
 end note
-  Worker -> API: POST resolver RPC\nAuthorization: Bearer B
-  API -> SupabaseKeys: choose kid; verify ES256 signature
-  SupabaseKeys --> API: B trusted
-  API -> RPC: execute as authenticated
-  RPC -> RPC: read auth.uid()=y\nread auth.jwt()->>'email'
-  alt active cloudflare_access:y mapping exists
-    RPC -> Identities: select canonical user_id x
-    Identities --> RPC: x
-  else no mapping exists
-    RPC -> Users: find x by normalized verified email
-    alt old GoTrue user was backfilled
-      Users --> RPC: existing x
-    else brand-new Access user
-      RPC -> Users: insert app_users(email); generate x
-      Users --> RPC: new x
+    Worker -> API: POST resolver RPC\nAuthorization: Bearer B
+    API -> SupabaseKeys: choose kid; verify ES256 signature
+    SupabaseKeys --> API: B trusted
+    API -> RPC: execute as authenticated
+    RPC -> RPC: read auth.uid()=y\nread auth.jwt()->>'email'
+    alt active cloudflare_access:y mapping exists
+      RPC -> Identities: select canonical user_id x
+      Identities --> RPC: x
+    else no mapping exists
+      RPC -> Users: find x by normalized verified email
+      alt old GoTrue user was backfilled
+        Users --> RPC: existing x
+      else brand-new Access user
+        RPC -> Users: insert app_users(email); generate x
+        Users --> RPC: new x
+      end
+      RPC -> Identities: insert cloudflare_access:y -> x
     end
-    RPC -> Identities: insert cloudflare_access:y -> x
+    RPC --> API: x
+    API --> Worker: x
+    Worker -> D1: insert y -> x
+    D1 --> Worker: persisted x
   end
-  RPC --> API: x
-  API --> Worker: x
   == Final CRUD JWT ==
   Worker -> Worker: mint JWT C; TTL 300 seconds
   note right of Worker
@@ -84,7 +93,7 @@ end note
 end
 
 note over Client,Items
-JWT B and JWT C exist inside Worker memory and go only to Supabase.
-They are never returned in an HTTP response.
+JWT C exists on every request and goes only to Supabase.
+JWT B exists only on a D1 directory miss; neither token is returned in an HTTP response.
 end note
 @enduml

@@ -28,6 +28,11 @@ worker_key: Worker Secret {
   label: "ES256 private JWK\nSUPABASE_JWT_SIGNING_KEY"
 }
 
+identity_db: Cloudflare D1 identity directory {
+  shape: cylinder
+  label: "access_identities\nAccess sub y → canonical x"
+}
+
 supabase: Supabase Data API {
   shape: rectangle
   label: "Supabase Data API\nPostgREST + RPC"
@@ -69,20 +74,23 @@ client -> access: "1. request Worker URL"
 access -> client: "2. Access login/session"
 access -> worker: "3. JWT A — Cf-Access-Jwt-Assertion\nRS256; sub=y; email; aud"
 worker -> access_jwks: "4. verify A: signature + issuer + aud"
-worker -> worker_key: "5. sign JWT B (temporary, 5 min)\nsub=y; role=authenticated\nbridge_stage=identity_resolution"
-worker -> supabase: "6. RPC request with Bearer B"
-supabase -> supabase_key: "7. verify B: ES256 + kid"
-supabase -> resolver: "8. authenticated RPC\nauth.uid()=y; email from JWT"
-resolver -> identity_map: "9. resolve existing y→x"
-resolver -> app_users: "10. otherwise match/create x by verified email\nand persist y→x"
-resolver -> supabase: "11. return x"
-worker -> worker_key: "12. sign JWT C (final, 5 min)\nsub=x; cf_access_sub=y\nrole=authenticated"
-worker -> supabase: "13. CRUD with Bearer C\nWorker derives user_id=x"
-supabase -> supabase_key: "14. verify C: ES256 + kid"
-supabase -> postgres: "15. CRUD; RLS auth.uid()=x"
-postgres -> supabase: "16. permitted rows / mutation"
-supabase -> worker: "17. result"
-worker -> client: "18. API response (never bridge JWT)"
+worker -> identity_db: "5. normal path: lookup y → x"
+identity_db -> worker: "6. x (directory hit)"
+worker -> worker_key: "7. normal path: sign JWT C (5 min)\nsub=x; cf_access_sub=y; role=authenticated"
+worker -> supabase: "8. normal path: CRUD with Bearer C\nWorker derives user_id=x"
+supabase -> supabase_key: "9. verify C: ES256 + kid"
+supabase -> postgres: "10. CRUD; RLS auth.uid()=x"
+postgres -> supabase: "11. permitted rows / mutation"
+supabase -> worker: "12. result"
+worker -> client: "13. API response (never bridge JWT)"
+
+worker -> worker_key: "D1 miss only: sign JWT B (temporary, 5 min)\nsub=y; bridge_stage=identity_resolution"
+worker -> supabase: "D1 miss only: resolver RPC with Bearer B"
+supabase -> resolver: "auth.uid()=y; email from JWT"
+resolver -> identity_map: "resolve existing y→x"
+resolver -> app_users: "otherwise match/create x by verified email\nand persist y→x"
+resolver -> worker: "return x"
+worker -> identity_db: "persist y → x for future D1 hits"
 
 legacy_client -> gotrue: "existing email/password or OAuth"
 gotrue -> legacy_client: "Supabase Auth JWT"
