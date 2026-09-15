@@ -1,5 +1,9 @@
 {
   "devDependencies": {
-    "supabase": "^2.117.0"
+    "supabase": "^2.117.0",
+    "wrangler": "4.86.0"
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "^2.109.0"
   }
 }
