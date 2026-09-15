@@ -1,0 +1,81 @@
+@startuml
+title Option C — Cloudflare Access to Supabase JWT bridge
+autonumber
+
+skinparam backgroundColor #FFFFFF
+skinparam defaultFontColor #202124
+skinparam sequence {
+  ArrowColor #2F5D8A
+  LifeLineBorderColor #8A8A8A
+  LifeLineBackgroundColor #FFFFFF
+  ParticipantBorderColor #2F5D8A
+  ParticipantBackgroundColor #EAF2FA
+  ParticipantFontColor #202124
+  ActorBorderColor #2F5D8A
+  ActorBackgroundColor #EAF2FA
+  ActorFontColor #202124
+  GroupBorderColor #8A8A8A
+  GroupBackgroundColor #F7F7F7
+  GroupFontColor #202124
+}
+
+actor Client
+participant "Cloudflare Access" as Access
+participant "Worker\nitems-api-worker" as Worker
+collections "Cloudflare Access JWKS" as AccessJWKS
+database "Worker secret\nES256 private JWK" as WorkerKey
+participant "Supabase Data API\n(PostgREST)" as DataAPI
+collections "Supabase signing keys\n(public JWK set)" as SupabaseKeys
+database "Postgres + RLS" as DB
+
+Client -> Access: GET /items
+
+alt No valid Access session
+  Access -> Client: Access login / identity-provider redirect
+  Client -> Access: completes login
+end
+
+Access -> Worker: GET /items\nCf-Access-Jwt-Assertion: <Access JWT>
+note right of Worker
+The client never provides a Supabase JWT
+to the Option C Worker.
+end note
+
+Worker -> AccessJWKS: fetch or use cached JWKS
+AccessJWKS --> Worker: public Access signing keys
+Worker -> Worker: jwtVerify(assertion)\nrequire expected issuer + application aud
+
+alt Missing, invalid, expired, wrong issuer, or wrong aud
+  Worker --> Client: 403 Cloudflare Access authentication required/invalid
+else Valid Access assertion
+  Worker -> Worker: read identity: sub + email
+  Worker -> Worker: reject if sub is not UUID-shaped
+  Worker -> WorkerKey: import ES256 private JWK
+  Worker -> Worker: mint bridge JWT\nheader: alg=ES256, kid=<imported key kid>\nclaims: sub, email, cf_access_sub,\nrole=authenticated, iat, exp=now+300s
+  Worker -> DataAPI: CRUD request\napikey: <publishable key>\nAuthorization: Bearer <bridge JWT>
+  DataAPI -> SupabaseKeys: select trusted signing key by kid\nverify ES256 signature
+
+  alt JWT invalid, unknown kid, bad signature, or expired
+    DataAPI --> Worker: 401 JWT rejected
+    Worker --> Client: error response
+  else Bridge JWT trusted
+    DataAPI -> DB: SET request.jwt.claims\nexecute query as authenticated
+    DB -> DB: auth.uid() = JWT sub\nRLS evaluates authenticated policies
+
+    alt RLS allows request
+      DB --> DataAPI: allowed rows / mutation result
+      DataAPI --> Worker: success payload
+      Worker --> Client: success payload
+    else RLS denies request
+      DB --> DataAPI: empty result or RLS error
+      DataAPI --> Worker: denied result
+      Worker --> Client: result/error
+    end
+  end
+end
+
+note over Access,DB
+GoTrue remains enabled. Its existing Supabase Auth JWT path remains separate
+while Access-sub to existing user_id migration/mapping is deliberately deferred.
+end note
+@enduml

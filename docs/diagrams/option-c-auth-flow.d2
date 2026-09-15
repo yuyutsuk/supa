@@ -1,0 +1,68 @@
+direction: right
+
+client: Browser / API client
+
+access: Cloudflare Access {
+  shape: rectangle
+  label: "Cloudflare Access\nidentity-provider login + policy"
+}
+
+worker: Cloudflare Worker\nitems-api-worker {
+  shape: rectangle
+  label: "Cloudflare Worker\nitems-api-worker"
+}
+
+access_jwks: Cloudflare Access JWKS {
+  shape: cylinder
+  label: "Access JWKS\n/cdn-cgi/access/certs"
+}
+
+worker_key: Worker Secret {
+  shape: cylinder
+  label: "ES256 private JWK\nSUPABASE_JWT_SIGNING_KEY"
+}
+
+supabase: Supabase Data API {
+  shape: rectangle
+  label: "Supabase Data API\nPostgREST"
+}
+
+supabase_key: Supabase signing key {
+  shape: cylinder
+  label: "Imported ES256 signing key\npublic key verifies bridge JWT"
+}
+
+postgres: Postgres + RLS {
+  shape: cylinder
+  label: "items table\nauth.uid() + authenticated role"
+}
+
+gotrue: Supabase GoTrue {
+  shape: rectangle
+  label: "GoTrue remains enabled\nexisting Supabase-auth flow"
+}
+
+legacy_client: Existing client
+
+client -> access: "1. request Worker URL"
+access -> client: "2. Access login/session"
+access -> worker: "3. Cf-Access-Jwt-Assertion\nAccess JWT (RS256)"
+worker -> access_jwks: "4. fetch/cached JWKS\nverify issuer + aud + signature"
+worker -> worker_key: "5. sign five-minute JWT\nsub, email, role=authenticated, iat, exp"
+worker -> supabase: "6. apikey: publishable key\nAuthorization: Bearer bridge JWT"
+supabase -> supabase_key: "7. verify ES256 signature + kid"
+supabase -> postgres: "8. run CRUD query"
+postgres -> supabase: "9. RLS evaluates auth.uid()\nand role=authenticated"
+supabase -> worker: "10. permitted rows / RLS denial"
+worker -> client: "11. API response"
+
+legacy_client -> gotrue: "existing email/password or OAuth"
+gotrue -> legacy_client: "Supabase Auth JWT"
+legacy_client -> supabase: "existing direct Data API flow"
+gotrue -> supabase_key: "issues new sessions\nwith active signing key"
+
+worker.style.fill: "#e3f2fd"
+access.style.fill: "#fff3e0"
+supabase.style.fill: "#e8f5e9"
+postgres.style.fill: "#f3e5f5"
+gotrue.style.fill: "#f5f5f5"

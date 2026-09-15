@@ -4,6 +4,7 @@
     "wrangler": "4.86.0"
   },
   "dependencies": {
-    "@supabase/supabase-js": "^2.109.0"
+    "@supabase/supabase-js": "^2.109.0",
+    "jose": "^6.2.12"
   }
 }
