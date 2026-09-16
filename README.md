@@ -179,13 +179,16 @@ Identity is derived from validated Access claims. The API does not trust caller-
 
 ## Repository map
 
+- `src/` - current Cloudflare-specific API runtime (Access JWT validation + Supabase JWT bridge).
 - `src/index.ts` - Worker implementation (Access validation, identity resolution, JWT bridge, CRUD).
 - `d1/migrations/0001_access_identity_directory.sql` - D1 directory schema.
 - `supabase/migrations/20260915000100_identity_migration.sql` - Supabase identity schema + resolver RPC.
+- `supabase/` - Supabase-specific stack and migration artifacts.
+- `supabase/config.toml` - local Supabase services configuration, including Auth (GoTrue) settings from the pre-migration stack.
 - `docs/diagrams/option-c-auth-flow.d2` - architecture diagram source.
 - `docs/diagrams/option-c-auth-sequence.puml` - end-to-end request sequence.
 - `docs/diagrams/option-c-jwt-identity-sequence.puml` - detailed JWT/identity sequence.
-- `supabase/functions/items-api/` - legacy Supabase Edge Function baseline.
+- `supabase/functions/items-api/` - pre-migration Supabase Edge Function API path (GoTrue/Supabase Auth based flow).
 
 ## Configuration
 
