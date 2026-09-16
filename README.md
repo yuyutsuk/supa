@@ -44,21 +44,32 @@ items.user_id = x
 That keeps business-table ownership independent of any particular identity
 provider. Existing rows do not need their `user_id` values rewritten.
 
-## Why the Worker bridges the JWT
+## Cloudflare Access JWT compatibility gap with Supabase Auth and RLS
 
-Cloudflare Access and Supabase do not directly trust each other's application
-tokens:
+Supabase accepts a JWT only after it can establish trust in its issuer, signing
+keys, and expected claims. A Cloudflare Access JWT contains a useful identity,
+but it is not directly compatible with this Supabase Data API/RLS path.
 
-- An Access application JWT is issued by Cloudflare, signed with Cloudflare's
-  keys, and has an Access-specific issuer and audience.
-- Supabase Data API verifies JWTs using its own configured signing keys.
-- Existing Supabase RLS policies need a usable `sub` and the
-  `role: "authenticated"` claim. An Access subject `y` also does not necessarily
-  equal the UUID `x` already stored in `items.user_id`.
+- Supabase supports JWTs from Supabase Auth and explicitly configured
+  third-party integrations. Its current first-class integrations are Clerk,
+  Firebase Auth, Auth0, AWS Cognito, and WorkOS; Cloudflare Access is not on
+  that list. Therefore this project has no direct Cloudflare issuer/JWKS trust
+  configuration at the Data API. [Supabase third-party auth docs](https://supabase.com/docs/guides/auth/third-party/overview)
+- A third-party JWT needs the literal `role: "authenticated"` claim for
+  Supabase to select the `authenticated` Postgres role. Without it, Supabase
+  treats the request as `anon`, so policies written `to authenticated` deny it.
+  [Supabase's Auth0 integration documents this requirement](https://supabase.com/docs/guides/auth/third-party/auth0).
+- Even after trust and role compatibility are solved, the Access subject `y`
+  need not equal canonical UUID `x` already stored in `items.user_id`.
 
-The Worker is the trust bridge. It validates the Access JWT first, then signs a
-new JWT using an ES256 private key held in a Worker Secret. Supabase holds the
-matching public signing key and accepts the new JWT.
+Direct forwarding therefore stops before Postgres can evaluate `auth.uid()`.
+The issue is not missing identity data; it is issuer/signature trust, claim
+compatibility, and stable application identity.
+
+The Worker is the bridge: it validates the Access JWT, resolves `y` to `x`, and
+signs a short-lived ES256 Supabase-compatible JWT. Supabase holds the matching
+public signing key and can then verify the Worker-issued token for its Data API
+and RLS path.
 
 ## How a request is authenticated and authorized
 
