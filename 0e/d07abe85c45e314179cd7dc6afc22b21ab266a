@@ -1,0 +1,21 @@
+ui/package-lock.json
+  s_56914efd6101fc::t_b99ae28402d0a4 1-5580
+worker-configuration.d.ts
+  s_56914efd6101fc::t_af00c0bd464b35 2,11-12,16-21
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "0ed07abe85c45e314179cd7dc6afc22b21ab266a",
+  "prompts": {},
+  "sessions": {
+    "s_56914efd6101fc": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_f589cc139ffeciEQH0uUhxb38k",
+        "model": "gpt-5.3-codex"
+      },
+      "human_author": "Kuber Gaur <kgaur@cloudflare.com>"
+    }
+  }
+}
