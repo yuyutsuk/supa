@@ -14,8 +14,15 @@ const BCRYPT_ROUNDS = 10;
 
 export type AuthEnv = Env & {
   BETTER_AUTH_SECRET: string;
+  PUBLIC_APP_ORIGINS?: string;
   SUPABASE_HYPERDRIVE: Hyperdrive;
 };
+
+function readPublicAppOrigins(env?: AuthEnv): string[] {
+  return env?.PUBLIC_APP_ORIGINS?.split(",")
+    .map((origin) => origin.trim())
+    .filter(Boolean) ?? [];
+}
 
 function toGeolocation(
   cf?: IncomingRequestCfProperties | null,
@@ -47,6 +54,7 @@ export function createAuth(
     appName: "Bottomo",
     baseURL: baseURL ?? "http://localhost",
     secret: env?.BETTER_AUTH_SECRET,
+    trustedOrigins: readPublicAppOrigins(env),
     ...withCloudflare(
       {
         autoDetectIpAddress: env ? true : false,

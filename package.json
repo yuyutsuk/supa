@@ -1,4 +1,8 @@
 {
+  "scripts": {
+    "build:ui": "npm --prefix ui run build",
+    "deploy": "npm run build:ui && wrangler deploy"
+  },
   "devDependencies": {
     "@better-auth/cli": "^1.4.22",
     "drizzle-kit": "^0.31.10",

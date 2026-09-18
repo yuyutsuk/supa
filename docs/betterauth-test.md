@@ -1,4 +1,4 @@
-# Better Auth Manual Test (Bearer Token, No Service Token)
+# Better Auth Manual Test (Bearer Token)
 
 ## 1) Setup
 
@@ -8,21 +8,13 @@ EMAIL="kgaur@cloudflare.com"
 PASS="<your-current-password>"
 ```
 
-## 2) Get user Access token via browser login
-
-```bash
-cloudflared access login "$BASE_URL"
-ACCESS_TOKEN="$(cloudflared access token "$BASE_URL")"
-```
-
-## 3) Sign in and capture Better Auth bearer token
+## 2) Sign in and capture Better Auth bearer token
 
 ```bash
 AUTH_TOKEN="$({
   curl -sS -o /tmp/bottomo.signin.json \
     -w "%header{set-auth-token}" \
     -X POST "$BASE_URL/api/auth/sign-in/email" \
-    -H "cf-access-token: $ACCESS_TOKEN" \
     -H "origin: $BASE_URL" \
     -H "content-type: application/json" \
     --data "{\"email\":\"$EMAIL\",\"password\":\"$PASS\"}";
@@ -31,21 +23,19 @@ AUTH_TOKEN="$({
 test -n "$AUTH_TOKEN" && echo "Better Auth bearer token captured"
 ```
 
-## 4) Get session (confirm Better Auth UUID)
+## 3) Get session (confirm Better Auth UUID)
 
 ```bash
 curl -sS "$BASE_URL/api/auth/get-session" \
-  -H "cf-access-token: $ACCESS_TOKEN" \
   -H "origin: $BASE_URL" \
   -H "authorization: Bearer $AUTH_TOKEN"
 ```
 
-## 5) Query app API (RLS path via Worker)
+## 4) Query app API (RLS path via Worker)
 
 ```bash
 # create item
 curl -sS -i -X POST "$BASE_URL/" \
-  -H "cf-access-token: $ACCESS_TOKEN" \
   -H "origin: $BASE_URL" \
   -H "authorization: Bearer $AUTH_TOKEN" \
   -H "content-type: application/json" \
@@ -53,14 +43,11 @@ curl -sS -i -X POST "$BASE_URL/" \
 
 # list items
 curl -sS "$BASE_URL/" \
-  -H "cf-access-token: $ACCESS_TOKEN" \
   -H "origin: $BASE_URL" \
   -H "authorization: Bearer $AUTH_TOKEN"
 ```
 
 ## Notes
 
-- No service token is used in this flow.
-- If `cloudflared access token` fails, run `cloudflared access login` again.
-- `cf-access-token` and Better Auth bearer token are separate layers.
+- Cloudflare Access token is no longer required for this flow.
 - If an API response includes `set-auth-token`, replace `AUTH_TOKEN` with that value (token rotation).

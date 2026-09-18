@@ -1,5 +1,5 @@
 @startuml
-title Better Auth + Supabase RLS bridge - deployment and request sequence
+title Better Auth + Supabase RLS bridge - UI + auth + API request sequence
 autonumber
 
 skinparam backgroundColor #FFFFFF
@@ -29,6 +29,7 @@ database "Worker Secret\nES256 private JWK" as WorkerKey
 end box
 
 participant "Cloudflare Hyperdrive\nSUPABASE_HYPERDRIVE" as Hyperdrive
+collections "Worker Static Assets\nASSETS (ui/dist)" as Assets
 
 box "Supabase platform" #E8F5E9
 participant "Supabase Data API\n(PostgREST)" as DataAPI
@@ -47,7 +48,7 @@ end note
 note over BetterAuth
 AuthN and session responsibility:
 - /api/auth/* endpoints
-- cookie session issue and verify
+- bearer session token issue and verify
 - user/session/account persistence
 end note
 
@@ -64,6 +65,14 @@ Supabase responsibility:
 - enforce auth.uid() RLS on app tables
 end note
 
+== UI request ==
+Client -> Worker: GET / (Accept: text/html)
+Worker --> Client: 302 redirect to /ui
+Client -> Worker: GET /ui
+Worker -> Assets: env.ASSETS.fetch(/index.html)
+Assets --> Worker: HTML response
+Worker --> Client: UI response
+
 == Sign-in / sign-up ==
 Client -> Worker: POST /api/auth/sign-up/email or /api/auth/sign-in/email
 Worker -> BetterAuth: in-process auth.handler(request)
@@ -71,11 +80,11 @@ BetterAuth -> Hyperdrive: query/insert auth records
 Hyperdrive -> AuthDB: SQL read/write
 AuthDB --> Hyperdrive: auth rows
 Hyperdrive --> BetterAuth: persistence result
-BetterAuth --> Worker: auth response + Set-Cookie
-Worker --> Client: auth payload + session cookie
+BetterAuth --> Worker: auth response + set-auth-token header
+Worker --> Client: auth payload + set-auth-token
 
 == Protected API call ==
-Client -> Worker: GET|POST|PATCH|DELETE /items with Better Auth cookie
+Client -> Worker: GET|POST|PATCH|DELETE / with Authorization: Bearer token
 Worker -> BetterAuth: in-process getSession(headers, request)
 BetterAuth -> Hyperdrive: read session + user
 Hyperdrive -> AuthDB: SELECT session and user
@@ -112,10 +121,5 @@ else Valid session
     Worker --> Client: error or empty payload
   end
 end
-
-note over Worker,AuthDB
-Cloudflare Access token validation and y->x identity mapping are removed from the
-runtime path. D1 access_identities directory is now legacy-only.
-end note
 
 @enduml

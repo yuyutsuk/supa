@@ -10,6 +10,14 @@
 		"enabled": true,
 		"head_sampling_rate": 1
 	},
+	"vars": {
+		"PUBLIC_APP_ORIGINS": "http://localhost:4321"
+	},
+	"assets": {
+		"directory": "./ui/dist",
+		"binding": "ASSETS",
+		"run_worker_first": true
+	},
 	"d1_databases": [
 		{
 			"binding": "IDENTITY_DB",

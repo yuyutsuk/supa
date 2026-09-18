@@ -4,7 +4,6 @@ This repo runs CIAM auth with Better Auth inside a Cloudflare Worker, while keep
 
 In short:
 
-- Auth gate at edge: Cloudflare Access
 - User auth/session authority: Better Auth (`/api/auth/*`)
 - Data authorization: Supabase/Postgres RLS
 - Internal bridge: Worker mints short-lived Supabase-compatible JWT per request
@@ -13,28 +12,28 @@ In short:
 
 ![Better Auth + Supabase bridge architecture](docs/diagrams/better-auth-flow.png)
 
+![Better Auth + Supabase bridge sequence](docs/diagrams/better-auth-sequence.png)
+
 Request path:
 
 ```text
-Client -> Cloudflare Access -> Worker (/api/auth or CRUD) -> Supabase Data API -> Postgres RLS
+Client -> Worker (/ui assets, /api/auth, or / CRUD) -> Supabase Data API -> Postgres RLS
 ```
 
 ## Runtime model
 
-1. Cloudflare Access validates `cf-access-token` at the edge.
-2. Worker routes:
+1. Worker routes:
    - `/api/auth/*` -> Better Auth handler (sign-up, sign-in, get-session, etc.)
    - `/` CRUD routes -> app logic
-3. Better Auth persists to Supabase Postgres through Hyperdrive (`user`, `session`, `account`, `verification`, `rate_limit`).
-4. For CRUD requests, Worker reads Better Auth session, then mints an internal ES256 JWT for Supabase Data API with:
+2. Better Auth persists to Supabase Postgres through Hyperdrive (`user`, `session`, `account`, `verification`, `rate_limit`).
+3. For CRUD requests, Worker reads Better Auth session, then mints an internal ES256 JWT for Supabase Data API with:
    - `sub = session.user.id`
    - `role = authenticated`
    - optional `email`
-5. Supabase Data API verifies that JWT and RLS evaluates `auth.uid()` as before.
+4. Supabase Data API verifies that JWT and RLS evaluates `auth.uid()` as before.
 
 ## Token boundaries
 
-- `cf-access-token`: Cloudflare Access JWT for edge gate.
 - Better Auth bearer token: signed session token (`set-auth-token` header), not a JWT.
 - Supabase bridge JWT: internal Worker -> Supabase token; not returned to client.
 
@@ -63,7 +62,6 @@ Client -> Cloudflare Access -> Worker (/api/auth or CRUD) -> Supabase Data API -
 ### Wrangler bindings
 
 - `SUPABASE_HYPERDRIVE` (required)
-- `IDENTITY_DB` (legacy; kept in config, not required by Better Auth runtime path)
 
 ### Worker secrets
 
@@ -113,42 +111,35 @@ npx wrangler secret put SUPABASE_JWT_SIGNING_KEY
 5. Deploy:
 
 ```bash
-npx wrangler deploy
+npm run deploy
 ```
 
 ## Manual test (Bearer flow)
 
 ```bash
-cloudflared access login "https://items-api-worker.gaurkuber.workers.dev"
-ACCESS_TOKEN="$(cloudflared access token "https://items-api-worker.gaurkuber.workers.dev")"
-
 BASE_URL="https://items-api-worker.gaurkuber.workers.dev"
 
 AUTH_TOKEN="$({
   curl -sS -o /tmp/bottomo.signin.json \
     -w "%header{set-auth-token}" \
     -X POST "$BASE_URL/api/auth/sign-in/email" \
-    -H "cf-access-token: $ACCESS_TOKEN" \
     -H "origin: $BASE_URL" \
     -H "content-type: application/json" \
     --data '{"email":"user@example.com","password":"StrongPass123"}'
 } | tr -d '\r\n')"
 
 curl -sS "$BASE_URL/api/auth/get-session" \
-  -H "cf-access-token: $ACCESS_TOKEN" \
   -H "origin: $BASE_URL" \
   -H "authorization: Bearer $AUTH_TOKEN"
 
 curl -sS "$BASE_URL/" \
-  -H "cf-access-token: $ACCESS_TOKEN" \
   -H "origin: $BASE_URL" \
   -H "authorization: Bearer $AUTH_TOKEN"
 ```
 
 ## Troubleshooting
 
-- `302 Found` HTML from Access -> Access token missing/expired; run `cloudflared access login` again.
-- `401 {"error":"Authentication is required"}` -> Access passed, but Better Auth session missing.
+- `401 {"error":"Authentication is required"}` -> Better Auth session missing or expired.
 - `MISSING_OR_NULL_ORIGIN` on auth routes -> send `origin: $BASE_URL` header.
 - `Missing required env var: FROM_DATABASE_URL` -> pass migration env vars when running `migration.ts`.
 

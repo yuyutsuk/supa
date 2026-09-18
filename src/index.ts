@@ -110,6 +110,33 @@ function appendCsvHeaderValue(headers: Headers, name: string, value: string): vo
   headers.set(name, Array.from(values).join(", "));
 }
 
+function isAllowedOrigin(request: Request, env: WorkerEnv): boolean {
+  const origin = request.headers.get("origin");
+  if (!origin) {
+    return false;
+  }
+
+  const configuredOrigins = env.PUBLIC_APP_ORIGINS?.split(",")
+    .map((value) => value.trim())
+    .filter(Boolean) ?? [];
+  return origin === new URL(request.url).origin || configuredOrigins.includes(origin);
+}
+
+function withCors(response: Response, request: Request, env: WorkerEnv): Response {
+  const origin = request.headers.get("origin");
+  if (!origin || !isAllowedOrigin(request, env)) {
+    return response;
+  }
+
+  response.headers.set("access-control-allow-origin", origin);
+  response.headers.set("access-control-allow-methods", "GET, POST, PATCH, DELETE, OPTIONS");
+  response.headers.set("access-control-allow-headers", "authorization, content-type");
+  response.headers.set("access-control-max-age", "86400");
+  appendCsvHeaderValue(response.headers, "access-control-expose-headers", "set-auth-token");
+  appendCsvHeaderValue(response.headers, "vary", "Origin");
+  return response;
+}
+
 function withAuthHeaders(response: Response, authHeaders: Headers): Response {
   for (const value of authHeaders.getSetCookie()) {
     response.headers.append("set-cookie", value);
@@ -194,23 +221,41 @@ async function resolveSession(
 export default {
   async fetch(request, env): Promise<Response> {
     const url = new URL(request.url);
+    const respond = (response: Response): Response => withCors(response, request, env);
+
+    if (request.method === "GET" && url.pathname === "/" && request.headers.get("accept")?.includes("text/html")) {
+      return Response.redirect(`${url.origin}/ui`, 302);
+    }
+
+    if (request.method === "GET" && (url.pathname === "/ui" || url.pathname.startsWith("/ui/"))) {
+      const assetUrl = new URL(request.url);
+      assetUrl.pathname = url.pathname === "/ui" ? "/" : url.pathname.slice(3) || "/";
+      return env.ASSETS.fetch(new Request(assetUrl, request));
+    }
+
+    if (request.method === "OPTIONS") {
+      return isAllowedOrigin(request, env)
+        ? respond(new Response(null, { status: 204 }))
+        : Response.json({ error: "Origin is not allowed" }, { status: 403 });
+    }
+
     const auth = createAuth(env, request.cf, url.origin);
 
     if (url.pathname === "/api/auth" || url.pathname.startsWith("/api/auth/")) {
       try {
         const authResponse = await auth.handler(request);
         if (authResponse) {
-          return authResponse;
+          return respond(authResponse);
         }
 
         console.error("Better Auth handler returned no response", {
           method: request.method,
           path: url.pathname,
         });
-        return Response.json({ error: "Unknown Better Auth route" }, { status: 404 });
+        return respond(Response.json({ error: "Unknown Better Auth route" }, { status: 404 }));
       } catch (error) {
         console.error("Better Auth handler failed", error);
-        return Response.json({ error: "Better Auth request failed" }, { status: 500 });
+        return respond(Response.json({ error: "Better Auth request failed" }, { status: 500 }));
       }
     }
 
@@ -218,7 +263,7 @@ export default {
     try {
       session = await resolveSession(request, auth);
     } catch {
-      return Response.json({ error: "Invalid Better Auth session" }, { status: 403 });
+      return respond(Response.json({ error: "Invalid Better Auth session" }, { status: 403 }));
     }
 
     if (!session.identity) {
@@ -226,7 +271,7 @@ export default {
         { error: "Authentication is required" },
         { status: 401 },
       );
-      return withAuthHeaders(response, session.authHeaders);
+      return respond(withAuthHeaders(response, session.authHeaders));
     }
 
     let supabaseJwt: string;
@@ -237,7 +282,7 @@ export default {
         { error: "Unable to mint Supabase authorization token" },
         { status: 500 },
       );
-      return withAuthHeaders(response, session.authHeaders);
+      return respond(withAuthHeaders(response, session.authHeaders));
     }
 
     const internalUserId = session.identity.userId;
@@ -245,18 +290,19 @@ export default {
     const id = url.searchParams.get("id");
 
     if (request.method === "GET") {
-      const { data, error } = await supabase.from("items").select("*").eq("user_id", internalUserId);
+      // Demo path: rely only on Postgres RLS for GET authorization.
+      const { data, error } = await supabase.from("items").select("*");
       const response = error
         ? Response.json({ error: error.message }, { status: 500 })
         : Response.json(data);
-      return withAuthHeaders(response, session.authHeaders);
+      return respond(withAuthHeaders(response, session.authHeaders));
     }
 
     if (request.method === "POST") {
       const body = await readBody(request);
       if (!body || !hasText(body.name)) {
         const response = Response.json({ error: "name is required" }, { status: 400 });
-        return withAuthHeaders(response, session.authHeaders);
+        return respond(withAuthHeaders(response, session.authHeaders));
       }
 
       const { data, error } = await supabase
@@ -267,13 +313,13 @@ export default {
       const response = error
         ? Response.json({ error: error.message }, { status: 500 })
         : Response.json(data, { status: 201 });
-      return withAuthHeaders(response, session.authHeaders);
+      return respond(withAuthHeaders(response, session.authHeaders));
     }
 
     if (request.method === "PATCH") {
       if (!id) {
         const response = Response.json({ error: "id is required" }, { status: 400 });
-        return withAuthHeaders(response, session.authHeaders);
+        return respond(withAuthHeaders(response, session.authHeaders));
       }
 
       const body = await readBody(request);
@@ -287,13 +333,13 @@ export default {
       const response = error
         ? Response.json({ error: error.message }, { status: 500 })
         : Response.json(data);
-      return withAuthHeaders(response, session.authHeaders);
+      return respond(withAuthHeaders(response, session.authHeaders));
     }
 
     if (request.method === "DELETE") {
       if (!id) {
         const response = Response.json({ error: "id is required" }, { status: 400 });
-        return withAuthHeaders(response, session.authHeaders);
+        return respond(withAuthHeaders(response, session.authHeaders));
       }
 
       const { error } = await supabase
@@ -304,12 +350,12 @@ export default {
       const response = error
         ? Response.json({ error: error.message }, { status: 500 })
         : new Response(null, { status: 204 });
-      return withAuthHeaders(response, session.authHeaders);
+      return respond(withAuthHeaders(response, session.authHeaders));
     }
 
-    return withAuthHeaders(
+    return respond(withAuthHeaders(
       new Response("Method not allowed", { status: 405 }),
       session.authHeaders,
-    );
+    ));
   },
 } satisfies ExportedHandler<WorkerEnv>;

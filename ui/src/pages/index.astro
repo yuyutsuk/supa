@@ -1,0 +1,269 @@
+---
+---
+
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Bottomo Auth Console</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;700&family=IBM+Plex+Mono:wght@400;500&display=swap"
+      rel="stylesheet"
+    />
+    <style>
+      :root {
+        --ink: #15202b;
+        --muted: #496278;
+        --paper: #f6f2e9;
+        --card: #fffdf8;
+        --accent: #007f5f;
+        --accent-2: #f4a261;
+        --danger: #b42318;
+        --border: #d8cdb9;
+      }
+
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        font-family: "Space Grotesk", sans-serif;
+        color: var(--ink);
+        min-height: 100vh;
+        background:
+          radial-gradient(circle at 12% 18%, #d2f2e8 0, transparent 32%),
+          radial-gradient(circle at 82% 12%, #fde3cb 0, transparent 25%),
+          linear-gradient(160deg, #f7f4ed 0%, #f0ebe0 100%);
+      }
+
+      .wrap {
+        max-width: 1024px;
+        margin: 0 auto;
+        padding: 28px 16px 40px;
+      }
+
+      h1 {
+        margin: 0;
+        font-size: clamp(1.4rem, 4vw, 2.2rem);
+        letter-spacing: -0.02em;
+      }
+
+      .sub { color: var(--muted); margin: 8px 0 20px; }
+
+      .grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+        gap: 16px;
+      }
+
+      .card {
+        background: var(--card);
+        border: 1px solid var(--border);
+        border-radius: 16px;
+        padding: 14px;
+        box-shadow: 0 8px 32px rgba(21, 32, 43, 0.06);
+      }
+
+      .card h2 { margin: 0 0 10px; font-size: 1.06rem; }
+
+      label { display: block; font-size: 0.88rem; margin: 8px 0 6px; color: var(--muted); }
+
+      input {
+        width: 100%;
+        padding: 10px;
+        border-radius: 10px;
+        border: 1px solid #cdbca1;
+        background: #fffcf6;
+        color: var(--ink);
+        font: inherit;
+      }
+
+      .row { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 12px; }
+
+      button {
+        border: 0;
+        border-radius: 10px;
+        background: var(--accent);
+        color: white;
+        font-weight: 600;
+        font-family: inherit;
+        padding: 10px 12px;
+        cursor: pointer;
+      }
+      button.alt { background: #355070; }
+      button.warn { background: var(--danger); }
+      button.ghost {
+        color: var(--ink);
+        background: #ebe3d5;
+      }
+
+      pre {
+        margin: 0;
+        white-space: pre-wrap;
+        font-family: "IBM Plex Mono", monospace;
+        font-size: 12px;
+        color: #1f2f3f;
+      }
+
+      .result {
+        margin-top: 12px;
+        border: 1px dashed #c5b89f;
+        border-radius: 10px;
+        padding: 10px;
+        min-height: 120px;
+        background: #fff9ef;
+      }
+
+      .token {
+        margin-top: 8px;
+        font-family: "IBM Plex Mono", monospace;
+        font-size: 12px;
+        background: #f8f3e8;
+        border: 1px solid var(--border);
+        border-radius: 10px;
+        padding: 8px;
+        word-break: break-all;
+      }
+    </style>
+  </head>
+  <body>
+    <main class="wrap">
+      <h1>Bottomo Auth Console</h1>
+      <p class="sub">Thin UI for Better Auth bearer flow + items API checks (Access-free).</p>
+
+      <section class="grid">
+        <article class="card">
+          <h2>Connection</h2>
+          <label for="baseUrl">Base URL</label>
+          <input id="baseUrl" value="https://items-api-worker.gaurkuber.workers.dev" />
+
+          <label for="email">Email</label>
+          <input id="email" type="email" autocomplete="email" />
+
+          <label for="password">Password</label>
+          <input id="password" type="password" placeholder="StrongPass123" />
+
+          <div class="row">
+            <button id="signupBtn" class="ghost">Sign up</button>
+            <button id="signinBtn">Sign in</button>
+            <button id="sessionBtn" class="alt">Get session</button>
+            <button id="logoutBtn" class="warn">Sign out</button>
+          </div>
+
+          <div class="token" id="bearerToken">AUTH_TOKEN: (not set)</div>
+        </article>
+
+        <article class="card">
+          <h2>Items API</h2>
+          <label for="itemName">Item name</label>
+          <input id="itemName" value="astro-item" />
+
+          <div class="row">
+            <button id="createItemBtn">Create item</button>
+            <button id="listItemsBtn" class="alt">List items</button>
+          </div>
+
+          <div class="result"><pre id="output">Ready.</pre></div>
+        </article>
+      </section>
+    </main>
+
+    <script>
+      const state = { authToken: "" };
+
+      const el = {
+        baseUrl: document.getElementById("baseUrl"),
+        email: document.getElementById("email"),
+        password: document.getElementById("password"),
+        itemName: document.getElementById("itemName"),
+        output: document.getElementById("output"),
+        bearerToken: document.getElementById("bearerToken"),
+      };
+
+      function writeOutput(title, status, data) {
+        const body = typeof data === "string" ? data : JSON.stringify(data, null, 2);
+        el.output.textContent = `${title}\nstatus: ${status}\n\n${body}`;
+      }
+
+      function updateToken(token) {
+        if (typeof token === "string") {
+          state.authToken = token;
+        }
+        el.bearerToken.textContent = state.authToken
+          ? `AUTH_TOKEN: ${state.authToken}`
+          : "AUTH_TOKEN: (not set)";
+      }
+
+      async function api(path, method = "GET", body) {
+        const baseUrl = el.baseUrl.value.trim().replace(/\/$/, "");
+
+        const headers = {};
+
+        if (state.authToken) {
+          headers.authorization = `Bearer ${state.authToken}`;
+        }
+        if (body) {
+          headers["content-type"] = "application/json";
+        }
+
+        const response = await fetch(`${baseUrl}${path}`, {
+          method,
+          headers,
+          body: body ? JSON.stringify(body) : undefined,
+        });
+
+        const rotated = response.headers.get("set-auth-token");
+        if (rotated) {
+          updateToken(rotated);
+        }
+
+        const responseText = await response.text();
+        let parsed = responseText;
+        try {
+          parsed = responseText ? JSON.parse(responseText) : null;
+        } catch {}
+
+        return { status: response.status, data: parsed };
+      }
+
+      document.getElementById("signupBtn").addEventListener("click", async () => {
+        const result = await api("/api/auth/sign-up/email", "POST", {
+          name: "Bottomo User",
+          email: el.email.value.trim(),
+          password: el.password.value,
+        });
+        writeOutput("sign-up", result.status, result.data);
+      });
+
+      document.getElementById("signinBtn").addEventListener("click", async () => {
+        const result = await api("/api/auth/sign-in/email", "POST", {
+          email: el.email.value.trim(),
+          password: el.password.value,
+        });
+        writeOutput("sign-in", result.status, result.data);
+      });
+
+      document.getElementById("sessionBtn").addEventListener("click", async () => {
+        const result = await api("/api/auth/get-session");
+        writeOutput("get-session", result.status, result.data);
+      });
+
+      document.getElementById("logoutBtn").addEventListener("click", async () => {
+        const result = await api("/api/auth/sign-out", "POST");
+        updateToken("");
+        writeOutput("sign-out", result.status, result.data);
+      });
+
+      document.getElementById("createItemBtn").addEventListener("click", async () => {
+        const result = await api("/", "POST", { name: el.itemName.value.trim() });
+        writeOutput("create-item", result.status, result.data);
+      });
+
+      document.getElementById("listItemsBtn").addEventListener("click", async () => {
+        const result = await api("/");
+        writeOutput("list-items", result.status, result.data);
+      });
+    </script>
+  </body>
+</html>
