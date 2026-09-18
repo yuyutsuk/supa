@@ -2,7 +2,7 @@
 
 ## Problem
 
-We wanted to migrate API authentication from Supabase GoTrue to Better Auth, without breaking existing Supabase row ownership and RLS behavior.
+The migration objective is to replace authentication from Supabase GoTrue with Better Auth, without breaking existing Supabase row ownership and RLS behavior.
 
 The key constraint was existing ownership semantics:
 
@@ -146,9 +146,9 @@ Validated end-to-end behavior:
 
 ## Outcome
 
-We replaced GoTrue on the API auth path with Better Auth, while preserving Supabase RLS and existing ownership semantics.
+GoTrue replaced on the API auth path with Better Auth, while preserving Supabase RLS and existing ownership semantics.
 
-This gave us a cleaner Worker-native auth flow with minimal blast radius to data authorization.
+This produces a cleaner Worker-native auth flow with minimal blast radius to data authorization.
 
 ## References
 
