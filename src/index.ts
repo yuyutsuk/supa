@@ -83,9 +83,50 @@ function readPrivateSigningJwk(serialized: string): PrivateSigningJwk {
   };
 }
 
+function appendCsvHeaderValue(headers: Headers, name: string, value: string): void {
+  const nextValues = value
+    .split(",")
+    .map((item) => item.trim())
+    .filter(Boolean);
+  if (nextValues.length === 0) {
+    return;
+  }
+
+  const current = headers.get(name);
+  if (!current) {
+    headers.set(name, nextValues.join(", "));
+    return;
+  }
+
+  const values = new Set(
+    current
+      .split(",")
+      .map((item) => item.trim())
+      .filter(Boolean),
+  );
+  for (const item of nextValues) {
+    values.add(item);
+  }
+  headers.set(name, Array.from(values).join(", "));
+}
+
 function withAuthHeaders(response: Response, authHeaders: Headers): Response {
   for (const value of authHeaders.getSetCookie()) {
     response.headers.append("set-cookie", value);
+  }
+
+  const authToken = authHeaders.get("set-auth-token");
+  if (hasText(authToken)) {
+    response.headers.set("set-auth-token", authToken);
+  }
+
+  const exposeHeaders = authHeaders.get("access-control-expose-headers");
+  if (hasText(exposeHeaders)) {
+    appendCsvHeaderValue(
+      response.headers,
+      "access-control-expose-headers",
+      exposeHeaders,
+    );
   }
 
   return response;

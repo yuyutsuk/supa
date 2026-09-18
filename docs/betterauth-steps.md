@@ -7,6 +7,7 @@
 
 2. Auth config updated
    - Set app name to `Bottomo` in `src/auth/index.ts`.
+   - Enabled Better Auth `bearer()` plugin so API clients can authenticate with `Authorization: Bearer <token>`.
    - Added Step 5 fields in `src/auth/index.ts`:
      - `userMetadata` (json)
      - `appMetadata` (json)

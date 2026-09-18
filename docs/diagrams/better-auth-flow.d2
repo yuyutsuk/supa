@@ -6,10 +6,15 @@ vars: {
 
 direction: right
 
-client: Web / mobile client
+client: Web / mobile API client
 
 cloudflare: Cloudflare edge deployment {
   label: "Cloudflare edge deployment\nSingle deployed service: items-api-worker"
+
+  access_gate: Cloudflare Access gate {
+    shape: rectangle
+    label: "Cloudflare Access gate\nResponsibility:\n- validate cf-access-token JWT\n- allow/deny before Worker"
+  }
 
   worker: Worker entrypoint / router {
     shape: rectangle
@@ -18,7 +23,12 @@ cloudflare: Cloudflare edge deployment {
 
   better_auth: Better Auth module (in-process) {
     shape: rectangle
-    label: "Better Auth module (in-process)\nResponsibility:\n- /api/auth/* handlers\n- issue and verify session cookies\n- persist user/session/account/verification/rate_limit"
+    label: "Better Auth module (in-process)\nResponsibility:\n- /api/auth/* handlers\n- issue bearer session token (set-auth-token)\n- verify Authorization: Bearer token\n- persist user/session/account/verification/rate_limit"
+  }
+
+  auth_secret: Worker Secret {
+    shape: cylinder
+    label: "BETTER_AUTH_SECRET\nsigns/verifies Better Auth session token"
   }
 
   jwt_bridge: Supabase JWT bridge (in-process) {
@@ -35,6 +45,11 @@ cloudflare: Cloudflare edge deployment {
 deploy_note: Deploy clarity {
   shape: rectangle
   label: "Better Auth is not a separate deployment.\nIt runs inside the same Worker process."
+}
+
+token_note: Token boundaries {
+  shape: rectangle
+  label: "Token boundaries\n- cf-access-token: Cloudflare Access JWT (client -> edge)\n- Better Auth bearer token: signed session token (client -> Worker)\n- Supabase bridge JWT: internal Worker -> Data API only"
 }
 
 hyperdrive: Cloudflare Hyperdrive {
@@ -69,29 +84,39 @@ legacy_d1: Legacy D1 identity directory {
   label: "access_identities (legacy)\nnot used by Better Auth path"
 }
 
-client -> cloudflare.worker: "1. request /api/auth/* or /items"
-cloudflare.worker -> cloudflare.better_auth: "2a. /api/auth/* in-process call"
-cloudflare.better_auth -> hyperdrive: "3. read/write auth state"
-hyperdrive -> supabase.auth_tables: "4. SQL operations"
+client -> cloudflare.access_gate: "1. request with cf-access-token JWT"
+cloudflare.access_gate -> cloudflare.worker: "2. allow if Access JWT valid"
 
-cloudflare.worker -> cloudflare.better_auth: "2b. /items: getSession() in-process call"
-cloudflare.worker -> cloudflare.jwt_bridge: "5. mint short-lived bridge JWT"
-cloudflare.jwt_bridge -> cloudflare.worker_key: "6. sign with ES256 private JWK"
-cloudflare.worker -> supabase.data_api: "7. call Data API with Bearer bridge JWT"
-supabase.data_api -> supabase.supabase_key: "8. verify ES256 signature + kid"
-supabase.data_api -> supabase.app_db: "9. execute CRUD with JWT claims"
-supabase.app_db -> supabase.data_api: "10. RLS allow/deny"
-supabase.data_api -> cloudflare.worker: "11. result"
-cloudflare.worker -> client: "12. API response"
+cloudflare.worker -> cloudflare.better_auth: "3a. /api/auth/* in-process call"
+cloudflare.better_auth -> cloudflare.auth_secret: "4a. sign session token"
+cloudflare.better_auth -> hyperdrive: "5a. read/write auth state"
+hyperdrive -> supabase.auth_tables: "6a. SQL operations"
+cloudflare.better_auth -> cloudflare.worker: "7a. set-auth-token response header"
+
+cloudflare.worker -> cloudflare.better_auth: "3b. /items: getSession() in-process call"
+cloudflare.better_auth -> cloudflare.auth_secret: "4b. verify bearer session token"
+cloudflare.better_auth -> hyperdrive: "5b. resolve session + user"
+cloudflare.worker -> cloudflare.jwt_bridge: "6b. mint short-lived bridge JWT"
+cloudflare.jwt_bridge -> cloudflare.worker_key: "7b. sign with ES256 private JWK"
+cloudflare.worker -> supabase.data_api: "8b. call Data API with Bearer bridge JWT"
+supabase.data_api -> supabase.supabase_key: "9b. verify ES256 signature + kid"
+supabase.data_api -> supabase.app_db: "10b. execute CRUD with JWT claims"
+supabase.app_db -> supabase.data_api: "11b. RLS allow/deny"
+supabase.data_api -> cloudflare.worker: "12b. result"
+cloudflare.worker -> client: "13. API response"
 
 cloudflare.worker -> legacy_d1: "No runtime dependency"
 deploy_note -> cloudflare.better_auth: "same deployed unit"
+token_note -> cloudflare.worker: "security contract"
 
 cloudflare.style.fill: "#e3f2fd"
+cloudflare.access_gate.style.fill: "#dcedc8"
 cloudflare.worker.style.fill: "#bbdefb"
 cloudflare.better_auth.style.fill: "#ffe0b2"
+cloudflare.auth_secret.style.fill: "#fff3e0"
 cloudflare.jwt_bridge.style.fill: "#c8e6c9"
 deploy_note.style.fill: "#fff9c4"
+token_note.style.fill: "#fffde7"
 hyperdrive.style.fill: "#f3e5f5"
 supabase.data_api.style.fill: "#e8f5e9"
 supabase.app_db.style.fill: "#fce4ec"

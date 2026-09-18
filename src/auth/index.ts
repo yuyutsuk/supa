@@ -1,7 +1,7 @@
 import { compare, hash } from "bcryptjs";
 import type { IncomingRequestCfProperties } from "@cloudflare/workers-types";
 import { betterAuth } from "better-auth";
-import { admin, anonymous } from "better-auth/plugins";
+import { admin, anonymous, bearer } from "better-auth/plugins";
 import {
   type CloudflareGeolocation,
   withCloudflare,
@@ -70,7 +70,7 @@ export function createAuth(
               compare(password, storedHash),
           },
         },
-        plugins: [admin(), anonymous()],
+        plugins: [admin(), anonymous(), bearer()],
         user: {
           additionalFields: {
             userMetadata: {
