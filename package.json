@@ -1,10 +1,18 @@
 {
   "devDependencies": {
+    "@better-auth/cli": "^1.4.22",
+    "drizzle-kit": "^0.31.10",
     "supabase": "^2.117.0",
     "wrangler": "4.86.0"
   },
   "dependencies": {
+    "@better-auth/drizzle-adapter": "^1.7.5",
     "@supabase/supabase-js": "^2.109.0",
-    "jose": "^6.2.12"
+    "bcryptjs": "^3.0.3",
+    "better-auth": "^1.7.5",
+    "better-auth-cloudflare": "^0.3.1",
+    "drizzle-orm": "^0.45.2",
+    "jose": "^6.2.12",
+    "postgres": "^3.4.9"
   }
 }

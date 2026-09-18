@@ -3,6 +3,9 @@
 	"name": "items-api-worker",
 	"main": "src/index.ts",
 	"compatibility_date": "2026-09-15",
+	"compatibility_flags": [
+		"nodejs_compat"
+	],
 	"observability": {
 		"enabled": true,
 		"head_sampling_rate": 1
@@ -13,6 +16,12 @@
 			"database_name": "items-api-identities",
 			"database_id": "c5a32c1b-557f-4d17-9610-3ee8fde86c35",
 			"migrations_dir": "d1/migrations"
+		}
+	],
+	"hyperdrive": [
+		{
+			"binding": "SUPABASE_HYPERDRIVE",
+			"id": "8b9adff41cd84f6fb543dcac0a1438c3"
 		}
 	]
 }

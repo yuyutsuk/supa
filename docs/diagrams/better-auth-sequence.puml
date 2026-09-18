@@ -1,0 +1,121 @@
+@startuml
+title Better Auth + Supabase RLS bridge - deployment and request sequence
+autonumber
+
+skinparam backgroundColor #FFFFFF
+skinparam defaultFontColor #202124
+skinparam sequence {
+  ArrowColor #2F5D8A
+  LifeLineBorderColor #8A8A8A
+  LifeLineBackgroundColor #FFFFFF
+  ParticipantBorderColor #2F5D8A
+  ParticipantBackgroundColor #EAF2FA
+  ParticipantFontColor #202124
+  ActorBorderColor #2F5D8A
+  ActorBackgroundColor #EAF2FA
+  ActorFontColor #202124
+  GroupBorderColor #8A8A8A
+  GroupBackgroundColor #F7F7F7
+  GroupFontColor #202124
+}
+
+actor Client
+
+box "Cloudflare edge: single deployed Worker service (items-api-worker)" #EAF2FA
+participant "Worker entrypoint\nrouter + /items handlers" as Worker
+participant "Better Auth module\n(in-process library)" as BetterAuth
+participant "JWT bridge module\n(in-process library)" as Bridge
+database "Worker Secret\nES256 private JWK" as WorkerKey
+end box
+
+participant "Cloudflare Hyperdrive\nSUPABASE_HYPERDRIVE" as Hyperdrive
+
+box "Supabase platform" #E8F5E9
+participant "Supabase Data API\n(PostgREST)" as DataAPI
+collections "Supabase public\nJWT signing key" as SupabaseKeys
+database "Postgres auth tables\nuser/session/account/verification/rate_limit" as AuthDB
+database "Postgres app tables\nitems + RLS policies" as AppDB
+end box
+
+note over Worker,BetterAuth
+Same deployment unit.
+No network hop between Worker and Better Auth.
+These are in-process function calls.
+end note
+
+== Responsibilities ==
+note over BetterAuth
+AuthN and session responsibility:
+- /api/auth/* endpoints
+- cookie session issue and verify
+- user/session/account persistence
+end note
+
+note over Worker,Bridge
+Application API responsibility:
+- /items CRUD orchestration
+- mint short-lived Supabase JWT
+- call Supabase Data API
+end note
+
+note over DataAPI,AppDB
+Supabase responsibility:
+- verify Worker-signed JWT
+- enforce auth.uid() RLS on app tables
+end note
+
+== Sign-in / sign-up ==
+Client -> Worker: POST /api/auth/sign-up/email or /api/auth/sign-in/email
+Worker -> BetterAuth: in-process auth.handler(request)
+BetterAuth -> Hyperdrive: query/insert auth records
+Hyperdrive -> AuthDB: SQL read/write
+AuthDB --> Hyperdrive: auth rows
+Hyperdrive --> BetterAuth: persistence result
+BetterAuth --> Worker: auth response + Set-Cookie
+Worker --> Client: auth payload + session cookie
+
+== Protected API call ==
+Client -> Worker: GET|POST|PATCH|DELETE /items with Better Auth cookie
+Worker -> BetterAuth: in-process getSession(headers, request)
+BetterAuth -> Hyperdrive: read session + user
+Hyperdrive -> AuthDB: SELECT session and user
+AuthDB --> Hyperdrive: session + user
+Hyperdrive --> BetterAuth: session payload
+
+alt Missing or invalid session
+  BetterAuth --> Worker: null or invalid session
+  Worker --> Client: 401 Authentication is required
+else Valid session
+  BetterAuth --> Worker: session.user.id + email
+  Worker -> Bridge: in-process mint bridge JWT (TTL 300s)
+  Bridge -> WorkerKey: load ES256 private JWK
+  Bridge --> Worker: signed JWT (sub=user.id, role=authenticated)
+  note right of Worker
+  Claims used for Supabase Data API:
+  sub = Better Auth user.id
+  role = authenticated
+  email = session user email
+  end note
+  Worker -> DataAPI: CRUD request with Authorization: Bearer bridge JWT
+  DataAPI -> SupabaseKeys: verify ES256 signature + kid
+  SupabaseKeys --> DataAPI: token trusted
+  DataAPI -> AppDB: execute query as authenticated
+  AppDB -> AppDB: auth.uid() = JWT sub\nRLS checks items.user_id ownership
+
+  alt RLS allows
+    AppDB --> DataAPI: rows / mutation result
+    DataAPI --> Worker: success payload
+    Worker --> Client: success payload
+  else RLS denies
+    AppDB --> DataAPI: denied / empty result
+    DataAPI --> Worker: denied response
+    Worker --> Client: error or empty payload
+  end
+end
+
+note over Worker,AuthDB
+Cloudflare Access token validation and y->x identity mapping are removed from the
+runtime path. D1 access_identities directory is now legacy-only.
+end note
+
+@enduml
